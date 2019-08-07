@@ -25,6 +25,14 @@ using namespace WireCell;
 
 using namespace WireCell::SigProc;
 
+static Array::array_xf toArray (Waveform::realseq_t in) {
+  Array::array_xf ou(in.size());
+  for(unsigned int i=0; i<in.size(); ++i) {
+    ou(i) = in.at(i);
+  }
+  return ou;
+}
+
 OmnibusSigProc::OmnibusSigProc(const std::string& anode_tn,
                                const std::string& per_chan_resp_tn,
                                const std::string& field_response,
@@ -579,6 +587,10 @@ void OmnibusSigProc::init_overall_response(IFrame::pointer frame)
 }
 
 void OmnibusSigProc::restore_baseline(Array::array_xxf& arr){
+  std::clock_t start_func = std::clock();
+
+  std::clock_t start;
+  double d1=0, d2=0;
   
   for (int i=0;i!=arr.rows();i++){
     Waveform::realseq_t signal(arr.cols());
@@ -590,7 +602,19 @@ void OmnibusSigProc::restore_baseline(Array::array_xxf& arr){
       }
     }
     signal.resize(ncount);
-    float baseline = WireCell::Waveform::median_binned(signal);
+    float baseline = 0;
+        
+    start = std::clock();
+    baseline = WireCell::Waveform::median_binned(signal);
+    // std::cout << "median_binned: " << baseline << std::endl;
+    d1 += (std::clock() - start) / (double)CLOCKS_PER_SEC;
+    
+    start = std::clock();
+    // std::nth_element(signal.begin(), signal.begin()+signal.size()/2, signal.end());
+    // baseline = signal.at(signal.size()/2);
+    // std::cout << "std::nth_element: " << baseline << std::endl;
+    d2 += (std::clock() - start) / (double)CLOCKS_PER_SEC;
+
 
     Waveform::realseq_t temp_signal(arr.cols());
     ncount = 0;
@@ -602,13 +626,28 @@ void OmnibusSigProc::restore_baseline(Array::array_xxf& arr){
     }
     temp_signal.resize(ncount);
     
+    start = std::clock();
     baseline = WireCell::Waveform::median_binned(temp_signal);
-    
+    d1 += (std::clock() - start) / (double)CLOCKS_PER_SEC;
+
+    start = std::clock();
+    // std::nth_element(temp_signal.begin(), temp_signal.begin()+temp_signal.size()/2, temp_signal.end());
+    // baseline = temp_signal.at(temp_signal.size()/2.);
+    d2 += (std::clock() - start) / (double)CLOCKS_PER_SEC;
+
     for (int j=0;j!=arr.cols();j++){
       if (arr(i,j)!=0)
 	arr(i,j) -= baseline;
     }
+
+    // start = std::clock();
+    // arr.row(i) -= baseline;
+    // d2 += (std::clock() - start) / (double)CLOCKS_PER_SEC;
   }
+  m_op_time["res-base"] += (std::clock() - start_func) / (double)CLOCKS_PER_SEC;
+
+  std::cout << "restore_baseline: median_binned: \t\t" << d1 << '\n';
+  std::cout << "restore_baseline: std::nth_element: \t" << d2 << '\n';
 }
 
 
@@ -783,17 +822,44 @@ void OmnibusSigProc::decon_2D_tightROI(int plane){
     roi_hf_filter_wf = ncr1->filter_waveform(m_c_data.cols());
   }
 
-  Array::array_xxc c_data_afterfilter(m_c_data.rows(),m_c_data.cols());
-  for (int irow=0; irow<m_c_data.rows(); ++irow) {
-    for (int icol=0; icol<m_c_data.cols(); ++icol) {
-      c_data_afterfilter(irow,icol) = m_c_data(irow,icol) * roi_hf_filter_wf.at(icol);
+  Array::array_xxc c_data_afterfilter(m_c_data.rows(), m_c_data.cols());
+  auto filter = toArray(roi_hf_filter_wf);
+
+  std::clock_t start;
+  double duration;
+
+  // start = std::clock();
+  // for (int irow = 0; irow < m_c_data.rows(); ++irow) {
+  //   c_data_afterfilter.row(irow) = m_c_data.row(irow) * filter.transpose();
+  // }
+  // duration = (std::clock() - start) / (double)CLOCKS_PER_SEC;
+  // std::cout << "filter: array-wise: \t\t" << duration << '\n';
+  // // std::cout << c_data_afterfilter.block(0,0, 5, 5) << std::endl;
+  // std::cout << c_data_afterfilter.rows() << ", " << c_data_afterfilter.cols() << std::endl;
+
+  start = std::clock();
+  for (int irow = 0; irow < m_c_data.rows(); ++irow) {
+    for (int icol = 0; icol < m_c_data.cols(); ++icol) {
+      c_data_afterfilter(irow, icol) =
+          m_c_data(irow, icol) * roi_hf_filter_wf.at(icol);
     }
   }
-  
+  duration = (std::clock() - start) / (double)CLOCKS_PER_SEC;
+  std::cout << "filter: elemt-wise: \t\t" << duration << '\n';
+  // std::cout << c_data_afterfilter.block(0,0, 5, 5) << std::endl;
+  std::cout << c_data_afterfilter.rows() << ", " << c_data_afterfilter.cols() << std::endl;
+
   //do the second round of inverse FFT on wire
+  start = std::clock();
   Array::array_xxf tm_r_data = Array::idft_cr(c_data_afterfilter,0);
   m_r_data = tm_r_data.block(m_pad_nwires[plane],0,m_nwires[plane],m_nticks);
+  duration = (std::clock() - start) / (double)CLOCKS_PER_SEC;
+  std::cout << "iFFT on wire: \t\t" << duration << '\n';
+  
+  start = std::clock();
   restore_baseline(m_r_data);
+  duration = (std::clock() - start) / (double)CLOCKS_PER_SEC;
+  std::cout << "restore_baseline: \t\t" << duration << '\n';
 
 }
  
@@ -1009,6 +1075,10 @@ void OmnibusSigProc::decon_2D_charge(int plane){
 
 bool OmnibusSigProc::operator()(const input_pointer& in, output_pointer& out)
 {
+  m_op_time["FFT"] = 0;
+  m_op_time["filter"] = 0;
+  m_op_time["res-base"] = 0;
+
   out = nullptr;
   if (!in) {
     log->debug("OmnibusSigProc: see EOS");
@@ -1140,6 +1210,10 @@ bool OmnibusSigProc::operator()(const input_pointer& in, output_pointer& out)
              gauss_traces.size(), m_gauss_tag, m_frame_tag);
 
   out = IFrame::pointer(sframe);
+
+  for (auto it : m_op_time) {
+    std::cout << it.first << " : " << it.second << " sec." << std::endl;
+  }
   
   return true;
 }

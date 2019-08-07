@@ -198,6 +198,8 @@ namespace WireCell {
       
       Log::logptr_t log;
 
+      std::map<std::string, float> m_op_time;
+
     };
   }
 }
